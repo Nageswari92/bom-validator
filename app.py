@@ -123,24 +123,34 @@ else:
                         mfg_lookup[p_num] = []
                     mfg_lookup[p_num].append({'mfg_name': mfg_name, 'mfg_pn': mfg_pn})
 
-            # Hierarchy Tracking Logic
+            # Hierarchy Tracking Logic (Optimized for Duplicate Parents)
             assemblies = {}
             current_parent_at_lvl = {0: None}
+            current_parent_key_at_lvl = {0: None} 
 
             for idx, row in df_bom.iterrows():
                 lvl = row['Level']
                 part_no = row['Part Number']
                 
-                parent_part = current_parent_at_lvl.get(lvl - 1)
-                if parent_part is not None:
-                    assemblies[parent_part]['children'].append(row)
+                # Fetch the parent unique key for the current level depth
+                parent_key = current_parent_key_at_lvl.get(lvl - 1)
+                
+                # Assign this component row to its verified unique parent sub-assembly
+                if parent_key is not None and parent_key in assemblies:
+                    assemblies[parent_key]['children'].append(row)
                     
                 current_parent_at_lvl[lvl] = part_no
                 
-                if part_no not in assemblies:
-                    assemblies[part_no] = {'info': row, 'children': []}
-                if lvl < len(current_parent_at_lvl) - 1 or idx == 0:
-                    assemblies[part_no]['info'] = row
+                # Create a uniquely indexed key to distinguish multiple instances of the same part number
+                unique_key = f"{part_no}_row_{idx}"
+                current_parent_key_at_lvl[lvl] = unique_key
+                
+                # Store structural meta context
+                assemblies[unique_key] = {
+                    'part_number': part_no,
+                    'info': row, 
+                    'children': []
+                }
 
         # Review and Validate Section
         if st.button("🚀 Run BAVA TECH Audit System"):
@@ -151,14 +161,15 @@ else:
             progress_bar = st.progress(0)
             total_assemblies = len(assemblies)
 
-            for index, (parent_part, data) in enumerate(assemblies.items()):
+            for index, (unique_key, data) in enumerate(assemblies.items()):
                 progress_bar.progress((index + 1) / total_assemblies)
                 
                 child_rows = data['children']
                 if not child_rows:
-                    continue 
+                    continue  # Ignore raw component parts that have no sub-structure (leaf nodes)
                     
                 parent_info = data['info']
+                parent_part = data['part_number']
                 parent_rev = str(parent_info['Revision']).strip() if pd.notna(parent_info['Revision']) else ""
                 if parent_rev.lower() == 'nan':
                     parent_rev = ""
@@ -283,7 +294,23 @@ else:
                         check_mfg_cells(f"J{current_row}", f"K{current_row}", c_part, f"Row {current_row}")
                             
                         current_row += 1
+                        
+                    # Target populated sheet row boundary logic
+                    actual_max_row = ws.max_row
+                    while actual_max_row > 0 and ws.cell(row=actual_max_row, column=5).value is None:
+                        actual_max_row -= 1
                     
+                    expected_max_row = current_row - 1
+                    if actual_max_row > expected_max_row:
+                        has_any_errors = True
+                        local_file_errors.append({
+                            "Row": f"Rows {expected_max_row + 1} to {actual_max_row}", 
+                            "Field": "Sheet Row Boundaries",
+                            "Expected": f"File should end at Row {expected_max_row}", 
+                            "Found": f"Detected extra/duplicate rows up to Row {actual_max_row}", 
+                            "Status": "ERROR"
+                        })
+                        
                     if len(local_file_errors) > 0:
                         has_any_errors = True
                         for err in local_file_errors:
