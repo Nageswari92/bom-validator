@@ -155,6 +155,9 @@ else:
             progress_bar = st.progress(0)
             total_assemblies = len(assemblies)
 
+            # தவிர்ப்பதற்கான பார்ட் நம்பர் தொடக்க எண்கள் (Custom BoM Prefixes)
+            banned_prefixes = ('0243', '0040', '1290', '0020', '0300', '0043')
+
             for index, (unique_key, data) in enumerate(assemblies.items()):
                 progress_bar.progress((index + 1) / total_assemblies)
                 
@@ -171,8 +174,22 @@ else:
                     parent_rev = parent_rev.zfill(2)
                 
                 expected_filename = f"{parent_part}_REV_{parent_rev}_VSE_00_BOM.xlsx"
+
+                # --- புதிய மாற்றம்: குறிப்பிட்ட எண்களில் தொடங்கினால் Custom BoM எனத் தவிர்த்தல் ---
+                if parent_part.startswith(banned_prefixes):
+                    unified_report_rows.append({
+                        "File": expected_filename, 
+                        "Audit Result": "SKIPPED (Custom BoM)", 
+                        "Row": "N/A", 
+                        "Field": "Part Number Filter", 
+                        "Expected": "Skipped Entry", 
+                        "Found": f"Starts with custom prefix", 
+                        "Status": "CLEAN"
+                    })
+                    continue # அடுத்த ஃபைலுக்குச் செல்லவும் (கீழே உள்ள சரிபார்ப்புகள் நடக்காது)
                 
-                # --- NEW FILENAME CORRECTION LOGIC ---
+                # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+
                 actual_filename_to_use = expected_filename
                 filename_typo_detected = False
                 wrong_filename_found = ""
@@ -211,7 +228,6 @@ else:
                         "Found": wrong_filename_found, 
                         "Status": "TYPO WARNING"
                     })
-                # --------------------------------------
                     
                 local_file_errors = []
                 try:
@@ -345,7 +361,6 @@ else:
                                 "Found": err["Found"], "Status": err["Status"]
                             })
                     elif not filename_typo_detected:
-                        # Append passed only if it didn't have a name mismatch before
                         unified_report_rows.append({
                             "File": actual_filename_to_use, "Audit Result": "PASSED (100% Match)",
                             "Row": "", "Field": "", "Expected": "", "Found": "", "Status": "CLEAN"
@@ -387,12 +402,16 @@ else:
                 green_bold_font = Font(name="Calibri", size=11, bold=True, color="008000")
                 red_bold_font = Font(name="Calibri", size=11, bold=True, color="FF0000")
                 orange_bold_font = Font(name="Calibri", size=11, bold=True, color="FF8C00")
+                blue_bold_font = Font(name="Calibri", size=11, bold=True, color="0000FF")
                 
                 for row_idx in range(2, ws.max_row + 1):
                     audit_cell = ws.cell(row=row_idx, column=2)
                     status_cell = ws.cell(row=row_idx, column=7)
                     
-                    if "PASSED" in str(audit_cell.value).upper() or "CLEAN" in str(status_cell.value).upper():
+                    if "SKIPPED" in str(audit_cell.value).upper():
+                        audit_cell.font = blue_bold_font
+                        status_cell.font = blue_bold_font
+                    elif "PASSED" in str(audit_cell.value).upper() or "CLEAN" in str(status_cell.value).upper():
                         audit_cell.font = green_bold_font
                         status_cell.font = green_bold_font
                     elif "TYPO" in str(status_cell.value).upper():
