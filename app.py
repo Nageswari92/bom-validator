@@ -49,7 +49,6 @@ else:
     # ==========================================
     # 3. Main BOM Matrix System (Authenticated)
     # ==========================================
-    # Action Header Row with Logout Utility
     top_col1, top_col2 = st.columns([8, 2])
     with top_col2:
         if st.button("🔒 Logout from System", use_container_width=True):
@@ -123,7 +122,7 @@ else:
                         mfg_lookup[p_num] = []
                     mfg_lookup[p_num].append({'mfg_name': mfg_name, 'mfg_pn': mfg_pn})
 
-            # Hierarchy Tracking Logic (Optimized for Duplicate Parents)
+            # Hierarchy Tracking Logic
             assemblies = {}
             current_parent_at_lvl = {0: None}
             current_parent_key_at_lvl = {0: None} 
@@ -132,20 +131,15 @@ else:
                 lvl = row['Level']
                 part_no = row['Part Number']
                 
-                # Fetch the parent unique key for the current level depth
                 parent_key = current_parent_key_at_lvl.get(lvl - 1)
                 
-                # Assign this component row to its verified unique parent sub-assembly
                 if parent_key is not None and parent_key in assemblies:
                     assemblies[parent_key]['children'].append(row)
                     
                 current_parent_at_lvl[lvl] = part_no
-                
-                # Create a uniquely indexed key to distinguish multiple instances of the same part number
                 unique_key = f"{part_no}_row_{idx}"
                 current_parent_key_at_lvl[lvl] = unique_key
                 
-                # Store structural meta context
                 assemblies[unique_key] = {
                     'part_number': part_no,
                     'info': row, 
@@ -166,7 +160,7 @@ else:
                 
                 child_rows = data['children']
                 if not child_rows:
-                    continue  # Ignore raw component parts that have no sub-structure (leaf nodes)
+                    continue  # Skip leaf nodes
                     
                 parent_info = data['info']
                 parent_part = data['part_number']
@@ -178,20 +172,51 @@ else:
                 
                 expected_filename = f"{parent_part}_REV_{parent_rev}_VSE_00_BOM.xlsx"
                 
+                # --- NEW FILENAME CORRECTION LOGIC ---
+                actual_filename_to_use = expected_filename
+                filename_typo_detected = False
+                wrong_filename_found = ""
+
                 if expected_filename not in uploaded_files_map:
+                    # Check if there is a file uploaded that contains the Part Number but has a wrong name format
+                    possible_matches = [f for f in uploaded_files_map.keys() if parent_part in f]
+                    
+                    if possible_matches:
+                        # Typo found! (e.g., lowercase, missing underscore, wrong rev formatting)
+                        filename_typo_detected = True
+                        wrong_filename_found = possible_matches[0]
+                        actual_filename_to_use = wrong_filename_found
+                    else:
+                        # Completely Missing
+                        has_any_errors = True
+                        unified_report_rows.append({
+                            "File": expected_filename, 
+                            "Audit Result": "FAILED (File Missing)", 
+                            "Row": "N/A", 
+                            "Field": "File Existence", 
+                            "Expected": f"Exact Match: {expected_filename}", 
+                            "Found": "File Missing in Uploaded Data", 
+                            "Status": "CRITICAL"
+                        })
+                        continue
+
+                if filename_typo_detected:
                     has_any_errors = True
                     unified_report_rows.append({
-                        "File": expected_filename, 
-                        "Audit Result": "FAILED (Data Mismatch)", 
+                        "File": wrong_filename_found, 
+                        "Audit Result": "FAILED (Name Mismatch)", 
                         "Row": "N/A", 
-                        "Field": "File Existence", "Expected": "File should be provided in inputs", 
-                        "Found": "File Missing in Uploaded Data", "Status": "CRITICAL"
+                        "Field": "File Naming Standard", 
+                        "Expected": expected_filename, 
+                        "Found": wrong_filename_found, 
+                        "Status": "TYPO WARNING"
                     })
-                    continue
+                # --------------------------------------
                     
                 local_file_errors = []
                 try:
-                    target_file_bytes = uploaded_files_map[expected_filename]
+                    # Use the actual identified filename (even if it had a typo) to parse the inside data
+                    target_file_bytes = uploaded_files_map[actual_filename_to_use]
                     wb = load_workbook(io.BytesIO(target_file_bytes))
                     ws = wb["VSE_BOM"] if "VSE_BOM" in wb.sheetnames else wb.active
                     file_modified = [False]
@@ -263,7 +288,7 @@ else:
                     check_cell("D5", "VSE Revision", "00")
                     check_cell("D6", "Customer ID", "APP01")
                     
-                    # Row 9 (Parent Context Data Check)
+                    # Row 9 Parent Data Check
                     check_cell("A9", "Row 9 Level", str(parent_info['Level']).strip())
                     exp_seq = str(parent_info['Find No']).split('.')[0].zfill(4) if pd.notna(parent_info['Find No']) else "0000"
                     check_cell("B9", "Row 9 Find No", exp_seq)
@@ -295,7 +320,7 @@ else:
                             
                         current_row += 1
                         
-                    # Target populated sheet row boundary logic
+                    # Sheet boundaries logic
                     actual_max_row = ws.max_row
                     while actual_max_row > 0 and ws.cell(row=actual_max_row, column=5).value is None:
                         actual_max_row -= 1
@@ -307,7 +332,7 @@ else:
                             "Row": f"Rows {expected_max_row + 1} to {actual_max_row}", 
                             "Field": "Sheet Row Boundaries",
                             "Expected": f"File should end at Row {expected_max_row}", 
-                            "Found": f"Detected extra/duplicate rows up to Row {actual_max_row}", 
+                            "Found": f"Detected extra rows up to Row {actual_max_row}", 
                             "Status": "ERROR"
                         })
                         
@@ -315,20 +340,21 @@ else:
                         has_any_errors = True
                         for err in local_file_errors:
                             unified_report_rows.append({
-                                "File": expected_filename, "Audit Result": "FAILED (Data Mismatch)",
+                                "File": actual_filename_to_use, "Audit Result": "FAILED (Data Mismatch)",
                                 "Row": err["Row"], "Field": err["Field"], "Expected": err["Expected"],
                                 "Found": err["Found"], "Status": err["Status"]
                             })
-                    else:
+                    elif not filename_typo_detected:
+                        # Append passed only if it didn't have a name mismatch before
                         unified_report_rows.append({
-                            "File": expected_filename, "Audit Result": "PASSED (100% Match)",
+                            "File": actual_filename_to_use, "Audit Result": "PASSED (100% Match)",
                             "Row": "", "Field": "", "Expected": "", "Found": "", "Status": "CLEAN"
                         })
                         
                 except Exception as e:
                     has_any_errors = True
                     unified_report_rows.append({
-                        "File": expected_filename, "Audit Result": "CRITICAL ERROR", "Row": "All", 
+                        "File": actual_filename_to_use, "Audit Result": "CRITICAL ERROR", "Row": "All", 
                         "Field": "File Read Error", "Expected": "Should open properly", 
                         "Found": f"Error: {str(e)}", "Status": "CORRUPTED"
                     })
@@ -347,12 +373,12 @@ else:
                     </div>
                 """)
             else:
-                st.error("⚠️ Audit Matrix detected data mismatches or missing attachments across processing pipelines.")
+                st.error("⚠️ Audit Matrix detected data mismatches, typos, or missing attachments across processing pipelines.")
                 
             st.write("### Master Audit Trail Tracker:")
             st.dataframe(df_master_report, width='stretch', hide_index=True)
             
-            # Build optimized Unified Master Excel Report
+            # Build Excel Report Out
             report_buffer = io.BytesIO()
             with pd.ExcelWriter(report_buffer, engine='openpyxl') as writer:
                 df_master_report.to_excel(writer, index=False, sheet_name='Master_Audit_Report')
@@ -360,6 +386,7 @@ else:
                 
                 green_bold_font = Font(name="Calibri", size=11, bold=True, color="008000")
                 red_bold_font = Font(name="Calibri", size=11, bold=True, color="FF0000")
+                orange_bold_font = Font(name="Calibri", size=11, bold=True, color="FF8C00")
                 
                 for row_idx in range(2, ws.max_row + 1):
                     audit_cell = ws.cell(row=row_idx, column=2)
@@ -368,7 +395,10 @@ else:
                     if "PASSED" in str(audit_cell.value).upper() or "CLEAN" in str(status_cell.value).upper():
                         audit_cell.font = green_bold_font
                         status_cell.font = green_bold_font
-                    elif "FAILED" in str(audit_cell.value).upper() or "ERROR" in str(status_cell.value).upper() or "CRITICAL" in str(status_cell.value).upper():
+                    elif "TYPO" in str(status_cell.value).upper():
+                        audit_cell.font = orange_bold_font
+                        status_cell.font = orange_bold_font
+                    else:
                         audit_cell.font = red_bold_font
                         status_cell.font = red_bold_font
                 
