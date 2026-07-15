@@ -28,7 +28,6 @@ if not st.session_state["logged_in"]:
         </div>
     """)
     
-    # UI Framework for Centering the Login Box
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
@@ -64,7 +63,6 @@ else:
 
     st.write("Upload the main structural BOM target along with component data (ZIP folder or raw multi-selection .xlsx files).")
 
-    # Double File Upload Section
     col1, col2 = st.columns(2)
 
     with col1:
@@ -101,7 +99,6 @@ else:
     if main_bom_file is not None and uploaded_files_map:
         st.info(f"**BAVA TECH Core Engine:** Main BOM loaded. Found **{len(uploaded_files_map)}** component file(s) across input channels.")
         
-        # Process BOM Data
         with st.spinner("Processing Source Data..."):
             df_all = pd.read_excel(main_bom_file, sheet_name=None, dtype=str)
             df_bom = df_all["BOM"] if "BOM" in df_all else list(df_all.values())[0]
@@ -124,7 +121,6 @@ else:
 
             # Hierarchy Tracking Logic
             assemblies = {}
-            current_parent_at_lvl = {0: None}
             current_parent_key_at_lvl = {0: None} 
 
             for idx, row in df_bom.iterrows():
@@ -136,7 +132,6 @@ else:
                 if parent_key is not None and parent_key in assemblies:
                     assemblies[parent_key]['children'].append(row)
                     
-                current_parent_at_lvl[lvl] = part_no
                 unique_key = f"{part_no}_row_{idx}"
                 current_parent_key_at_lvl[lvl] = unique_key
                 
@@ -146,7 +141,6 @@ else:
                     'children': []
                 }
 
-        # Review and Validate Section
         if st.button("🚀 Run BAVA TECH Audit System"):
             unified_report_rows = []
             has_any_errors = False
@@ -155,7 +149,6 @@ else:
             progress_bar = st.progress(0)
             total_assemblies = len(assemblies)
 
-            # தவிர்ப்பதற்கான பார்ட் நம்பர் தொடக்க எண்கள் (Custom BoM Prefixes)
             banned_prefixes = ('0243', '0040', '1290', '0020', '0300', '0043','0042')
 
             for index, (unique_key, data) in enumerate(assemblies.items()):
@@ -163,7 +156,7 @@ else:
                 
                 child_rows = data['children']
                 if not child_rows:
-                    continue  # Skip leaf nodes
+                    continue  
                     
                 parent_info = data['info']
                 parent_part = data['part_number']
@@ -175,7 +168,6 @@ else:
                 
                 expected_filename = f"{parent_part}_REV_{parent_rev}_VSE_00_BOM.xlsx"
 
-                # --- புதிய மாற்றம்: குறிப்பிட்ட எண்களில் தொடங்கினால் Custom BoM எனத் தவிர்த்தல் ---
                 if parent_part.startswith(banned_prefixes):
                     unified_report_rows.append({
                         "File": expected_filename, 
@@ -186,25 +178,20 @@ else:
                         "Found": f"Starts with custom prefix", 
                         "Status": "CLEAN"
                     })
-                    continue # அடுத்த ஃபைலுக்குச் செல்லவும் (கீழே உள்ள சரிபார்ப்புகள் நடக்காது)
+                    continue 
                 
-                # --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
-
                 actual_filename_to_use = expected_filename
                 filename_typo_detected = False
                 wrong_filename_found = ""
 
                 if expected_filename not in uploaded_files_map:
-                    # Check if there is a file uploaded that contains the Part Number but has a wrong name format
                     possible_matches = [f for f in uploaded_files_map.keys() if parent_part in f]
                     
                     if possible_matches:
-                        # Typo found! (e.g., lowercase, missing underscore, wrong rev formatting)
                         filename_typo_detected = True
                         wrong_filename_found = possible_matches[0]
                         actual_filename_to_use = wrong_filename_found
                     else:
-                        # Completely Missing
                         has_any_errors = True
                         unified_report_rows.append({
                             "File": expected_filename, 
@@ -231,7 +218,6 @@ else:
                     
                 local_file_errors = []
                 try:
-                    # Use the actual identified filename (even if it had a typo) to parse the inside data
                     target_file_bytes = uploaded_files_map[actual_filename_to_use]
                     wb = load_workbook(io.BytesIO(target_file_bytes))
                     ws = wb["VSE_BOM"] if "VSE_BOM" in wb.sheetnames else wb.active
@@ -246,12 +232,14 @@ else:
                                 pass
                         return str(found_raw_val if found_raw_val is not None else '').strip()
 
-                    def check_cell(cell_coord, field_name, expected_val):
+                    def check_cell(cell_coord, field_name, expected_val, ignore_mismatch=False):
                         exp_val_str = str(expected_val).strip()
                         raw_found = ws[cell_coord].value
                         found_val = get_dynamic_format(exp_val_str, raw_found)
 
                         if found_val != exp_val_str:
+                            if ignore_mismatch:
+                                return # Bypasses logging an error if sequence numbers are dynamically structured
                             ws[cell_coord].fill = yellow_fill
                             file_modified[0] = True
                             local_file_errors.append({
@@ -306,8 +294,11 @@ else:
                     
                     # Row 9 Parent Data Check
                     check_cell("A9", "Row 9 Level", str(parent_info['Level']).strip())
+                    
+                    # UPDATE: Set ignore_mismatch=True on Parent Row Find No to handle multi-file sequence variation
                     exp_seq = str(parent_info['Find No']).split('.')[0].zfill(4) if pd.notna(parent_info['Find No']) else "0000"
-                    check_cell("B9", "Row 9 Find No", exp_seq)
+                    check_cell("B9", "Row 9 Find No", exp_seq, ignore_mismatch=True)
+                    
                     check_cell("D9", "Parent Qty", str(parent_info['Quantity']).strip() if pd.notna(parent_info['Quantity']) else "1.0")
                     check_cell("E9", "Row 9 Part Number", parent_part)
                     check_cell("F9", "Row 9 Revision", parent_rev)
@@ -319,8 +310,11 @@ else:
                     current_row = 10
                     for child in child_rows:
                         check_cell(f"A{current_row}", f"Row {current_row} Level", str(child['Level']).strip())
+                        
+                        # UPDATE: Set ignore_mismatch=True on Child Rows Find No validation
                         c_seq = str(child['Find No']).split('.')[0].zfill(4) if pd.notna(child['Find No']) else "0000"
-                        check_cell(f"B{current_row}", f"Row {current_row} Find No", c_seq)
+                        check_cell(f"B{current_row}", f"Row {current_row} Find No", c_seq, ignore_mismatch=True)
+                        
                         check_cell(f"D{current_row}", f"Child Qty", str(child['Quantity']).strip() if pd.notna(child['Quantity']) else "0.0")
                         c_part = str(child['Part Number']).strip()
                         check_cell(f"E{current_row}", f"Row {current_row} Part Number", c_part)
