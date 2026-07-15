@@ -156,7 +156,7 @@ else:
             total_assemblies = len(assemblies)
 
             # தவிர்ப்பதற்கான பார்ட் நம்பர் தொடக்க எண்கள் (Custom BoM Prefixes)
-            banned_prefixes = ('0243', '0040', '1290', '0020', '0300', '0043')
+            banned_prefixes = ('0243', '0040', '1290', '0020', '0300', '0043','0042')
 
             for index, (unique_key, data) in enumerate(assemblies.items()):
                 progress_bar.progress((index + 1) / total_assemblies)
