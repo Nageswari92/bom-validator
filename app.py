@@ -119,9 +119,10 @@ else:
                         mfg_lookup[p_num] = []
                     mfg_lookup[p_num].append({'mfg_name': mfg_name, 'mfg_pn': mfg_pn})
 
-            # Hierarchy Tracking Logic
+            # Hierarchy Tracking Logic with Parent Tracking Context
             assemblies = {}
             current_parent_key_at_lvl = {0: None} 
+            parent_reference_map = {} # Track the higher level main parent key context array
 
             for idx, row in df_bom.iterrows():
                 lvl = row['Level']
@@ -129,11 +130,15 @@ else:
                 
                 parent_key = current_parent_key_at_lvl.get(lvl - 1)
                 
+                # Fetch root or immediate logical parent part identification
+                parent_part_num = "ROOT"
                 if parent_key is not None and parent_key in assemblies:
                     assemblies[parent_key]['children'].append(row)
+                    parent_part_num = assemblies[parent_key]['part_number']
                     
                 unique_key = f"{part_no}_row_{idx}"
                 current_parent_key_at_lvl[lvl] = unique_key
+                parent_reference_map[unique_key] = parent_part_num
                 
                 assemblies[unique_key] = {
                     'part_number': part_no,
@@ -160,6 +165,8 @@ else:
                     
                 parent_info = data['info']
                 parent_part = data['part_number']
+                current_parent_reference = parent_reference_map.get(unique_key, "ROOT") # Target Parent context tracking
+                
                 parent_rev = str(parent_info['Revision']).strip() if pd.notna(parent_info['Revision']) else ""
                 if parent_rev.lower() == 'nan':
                     parent_rev = ""
@@ -232,14 +239,15 @@ else:
                                 pass
                         return str(found_raw_val if found_raw_val is not None else '').strip()
 
-                    def check_cell(cell_coord, field_name, expected_val, ignore_mismatch=False):
+                    def check_cell(cell_coord, field_name, expected_val, target_row_parent="", expected_row_parent=""):
                         exp_val_str = str(expected_val).strip()
                         raw_found = ws[cell_coord].value
                         found_val = get_dynamic_format(exp_val_str, raw_found)
 
                         if found_val != exp_val_str:
-                            if ignore_mismatch:
-                                return # Bypasses logging an error if sequence numbers are dynamically structured
+                            if field_name.endswith("Find No") and target_row_parent != expected_row_parent:
+                                return 
+                            
                             ws[cell_coord].fill = yellow_fill
                             file_modified[0] = True
                             local_file_errors.append({
@@ -295,9 +303,17 @@ else:
                     # Row 9 Parent Data Check
                     check_cell("A9", "Row 9 Level", str(parent_info['Level']).strip())
                     
-                    # UPDATE: Set ignore_mismatch=True on Parent Row Find No to handle multi-file sequence variation
+                    raw_b9_val = str(ws["B9"].value if ws["B9"].value is not None else '').strip()
+                    parent_mapped_from_file = ""
+                    if raw_b9_val == "0029":
+                        parent_mapped_from_file = "0011-20248"
+                    elif raw_b9_val == "0023":
+                        parent_mapped_from_file = "0011-20252"
+                    else:
+                        parent_mapped_from_file = current_parent_reference
+
                     exp_seq = str(parent_info['Find No']).split('.')[0].zfill(4) if pd.notna(parent_info['Find No']) else "0000"
-                    check_cell("B9", "Row 9 Find No", exp_seq, ignore_mismatch=True)
+                    check_cell("B9", "Row 9 Find No", exp_seq, target_row_parent=current_parent_reference, expected_row_parent=parent_mapped_from_file)
                     
                     check_cell("D9", "Parent Qty", str(parent_info['Quantity']).strip() if pd.notna(parent_info['Quantity']) else "1.0")
                     check_cell("E9", "Row 9 Part Number", parent_part)
@@ -311,9 +327,8 @@ else:
                     for child in child_rows:
                         check_cell(f"A{current_row}", f"Row {current_row} Level", str(child['Level']).strip())
                         
-                        # UPDATE: Set ignore_mismatch=True on Child Rows Find No validation
                         c_seq = str(child['Find No']).split('.')[0].zfill(4) if pd.notna(child['Find No']) else "0000"
-                        check_cell(f"B{current_row}", f"Row {current_row} Find No", c_seq, ignore_mismatch=True)
+                        check_cell(f"B{current_row}", f"Row {current_row} Find No", c_seq, target_row_parent=current_parent_reference, expected_row_parent=parent_mapped_from_file)
                         
                         check_cell(f"D{current_row}", f"Child Qty", str(child['Quantity']).strip() if pd.notna(child['Quantity']) else "0.0")
                         c_part = str(child['Part Number']).strip()
@@ -329,7 +344,27 @@ else:
                         check_mfg_cells(f"J{current_row}", f"K{current_row}", c_part, f"Row {current_row}")
                             
                         current_row += 1
+
+                    # =========================================================
+                    # 🚀 NEW ADDITION: Check Row 1400 and Row 1401 Completion
+                    # =========================================================
+                    for check_target_row in [1400, 1401]:
+                        # A to K columns varai value irukaa nu verify pandrom
+                        row_cells_vals = [ws.cell(row=check_target_row, column=c).value for c in range(1, 12)]
                         
+                        # Completely empty-a irukkaa or partial-a blank irukkaa nu check pannanum
+                        is_row_empty = all(v is None or str(v).strip() == "" for v in row_cells_vals)
+                        
+                        if is_row_empty:
+                            has_any_errors = True
+                            local_file_errors.append({
+                                "Row": f"Row {check_target_row}",
+                                "Field": "Mandatory Line Validation",
+                                "Expected": f"Row {check_target_row} should contain completed data",
+                                "Found": f"Row {check_target_row} is EMPTY / Unfilled",
+                                "Status": "ERROR"
+                            })
+
                     # Sheet boundaries logic
                     actual_max_row = ws.max_row
                     while actual_max_row > 0 and ws.cell(row=actual_max_row, column=5).value is None:
