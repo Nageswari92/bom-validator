@@ -119,10 +119,10 @@ else:
                         mfg_lookup[p_num] = []
                     mfg_lookup[p_num].append({'mfg_name': mfg_name, 'mfg_pn': mfg_pn})
 
-            # Hierarchy Tracking Logic with Parent Tracking Context
+            # Hierarchy Tracking Logic
             assemblies = {}
             current_parent_key_at_lvl = {0: None} 
-            parent_reference_map = {} # Track the higher level main parent key context array
+            parent_reference_map = {} 
 
             for idx, row in df_bom.iterrows():
                 lvl = row['Level']
@@ -130,7 +130,6 @@ else:
                 
                 parent_key = current_parent_key_at_lvl.get(lvl - 1)
                 
-                # Fetch root or immediate logical parent part identification
                 parent_part_num = "ROOT"
                 if parent_key is not None and parent_key in assemblies:
                     assemblies[parent_key]['children'].append(row)
@@ -165,7 +164,7 @@ else:
                     
                 parent_info = data['info']
                 parent_part = data['part_number']
-                current_parent_reference = parent_reference_map.get(unique_key, "ROOT") # Target Parent context tracking
+                current_parent_reference = parent_reference_map.get(unique_key, "ROOT")
                 
                 parent_rev = str(parent_info['Revision']).strip() if pd.notna(parent_info['Revision']) else ""
                 if parent_rev.lower() == 'nan':
@@ -345,21 +344,61 @@ else:
                             
                         current_row += 1
 
-                    # Sheet boundaries logic
-                    actual_max_row = ws.max_row
-                    while actual_max_row > 0 and ws.cell(row=actual_max_row, column=5).value is None:
-                        actual_max_row -= 1
+                    # =========================================================
+                    # 🚀 UPDATED DYNAMIC LOGIC: Check Black Line & Formula Row
+                    # =========================================================
+                    black_line_row = current_row      # e.g., Row 25/26 (Next line right after data)
+                    formula_line_row = current_row + 1  # e.g., Row 26/27 (Line right after Black line)
+
+                    # 1. Black Line Check
+                    black_line_cells = [ws.cell(row=black_line_row, column=c) for c in range(1, 12)]
+                    has_black_fill = any(cell.fill and cell.fill.start_color and cell.fill.start_color.rgb for cell in black_line_cells)
                     
-                    expected_max_row = current_row - 1
-                    if actual_max_row > expected_max_row:
+                    if not has_black_fill:
                         has_any_errors = True
                         local_file_errors.append({
-                            "Row": f"Rows {expected_max_row + 1} to {actual_max_row}", 
-                            "Field": "Sheet Row Boundaries",
-                            "Expected": f"File should end at Row {expected_max_row}", 
-                            "Found": f"Detected extra rows up to Row {actual_max_row}", 
+                            "Row": f"Row {black_line_row}",
+                            "Field": "Dynamic Black Line Shift",
+                            "Expected": f"Row {black_line_row} should contain Black Separator Fill",
+                            "Found": f"Row {black_line_row} Black Separator Fill MISSING",
                             "Status": "ERROR"
                         })
+
+                    # 2. Formula Row Check
+                    formula_cells = [ws.cell(row=formula_line_row, column=c).value for c in range(1, ws.max_column + 1)]
+                    has_formula = any(v is not None and str(v).startswith("=") for v in formula_cells)
+
+                    if not has_formula:
+                        has_any_errors = True
+                        local_file_errors.append({
+                            "Row": f"Row {formula_line_row}",
+                            "Field": "Dynamic Formula Shift",
+                            "Expected": f"Row {formula_line_row} should contain Summary Formulas",
+                            "Found": f"Row {formula_line_row} Formulas MISSING / Empty",
+                            "Status": "ERROR"
+                        })
+
+                    # Sheet boundaries logic
+                    actual_max_row = ws.max_row
+                    expected_max_row = formula_line_row
+
+                    if actual_max_row > expected_max_row:
+                        # Ensure remaining bottom rows are empty
+                        extra_data_found = False
+                        for check_r in range(expected_max_row + 1, actual_max_row + 1):
+                            if any(ws.cell(row=check_r, column=c).value is not None for c in range(1, 12)):
+                                extra_data_found = True
+                                break
+
+                        if extra_data_found:
+                            has_any_errors = True
+                            local_file_errors.append({
+                                "Row": f"Rows {expected_max_row + 1} to {actual_max_row}", 
+                                "Field": "Undeleted Template Rows",
+                                "Expected": f"File should terminate at Row {expected_max_row}", 
+                                "Found": f"Detected un-deleted template rows up to Row {actual_max_row}", 
+                                "Status": "ERROR"
+                            })
                         
                     if len(local_file_errors) > 0:
                         has_any_errors = True
