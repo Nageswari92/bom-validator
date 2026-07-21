@@ -345,26 +345,6 @@ else:
                             
                         current_row += 1
 
-                    # =========================================================
-                    # 🚀 NEW ADDITION: Check Row 1400 and Row 1401 Completion
-                    # =========================================================
-                    for check_target_row in [1400, 1401]:
-                        # A to K columns varai value irukaa nu verify pandrom
-                        row_cells_vals = [ws.cell(row=check_target_row, column=c).value for c in range(1, 12)]
-                        
-                        # Completely empty-a irukkaa or partial-a blank irukkaa nu check pannanum
-                        is_row_empty = all(v is None or str(v).strip() == "" for v in row_cells_vals)
-                        
-                        if is_row_empty:
-                            has_any_errors = True
-                            local_file_errors.append({
-                                "Row": f"Row {check_target_row}",
-                                "Field": "Mandatory Line Validation",
-                                "Expected": f"Row {check_target_row} should contain completed data",
-                                "Found": f"Row {check_target_row} is EMPTY / Unfilled",
-                                "Status": "ERROR"
-                            })
-
                     # Sheet boundaries logic
                     actual_max_row = ws.max_row
                     while actual_max_row > 0 and ws.cell(row=actual_max_row, column=5).value is None:
